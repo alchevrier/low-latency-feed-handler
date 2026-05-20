@@ -2,6 +2,21 @@
 
 C++23 low-latency feed handler — DPDK pcap PMD, NASDAQ ITCH 5.0 parser, zero-copy mbuf pipeline, MPSC market data aggregation into SOA order book. Zero heap allocation end-to-end.
 
+## Intended Architecture
+
+```mermaid
+flowchart TD
+    A["NIC / pcap PMD\n(rte_eth_rx_burst)"] -->|"rte_mbuf*\n(hugepage mempool)"| B["ITCH 5.0 Parser\n(zero-copy from mbuf)"]
+    B -->|"MarketDataEvent\n(stack-allocated)"| C["MPSC Queue\n(N-SPSC, pre-allocated ring)"]
+    C -->|"move into slot"| D["Book Writer Thread\n(pinned core)"]
+    D -->|"seqlock write"| E["SOA Order Book\n(pre-sized arrays)"]
+    E -->|"seqlock read"| F["Matching Thread\n(pinned core)"]
+```
+
+Zero heap allocation end-to-end. Each stage uses a pre-allocation strategy
+declared at startup — `rte_mempool` for the NIC boundary, ring slots for the
+queue, fixed arrays for the book. See [ADR-002](docs/adr/ADR-002-zero-heap-allocation.md).
+
 ## Architecture Decision Records
 
 | ADR | Title | Status |
