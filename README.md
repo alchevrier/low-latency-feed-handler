@@ -2,6 +2,45 @@
 
 C++23 low-latency feed handler — DPDK pcap PMD, NASDAQ ITCH 5.0 parser, zero-copy mbuf pipeline, MPSC market data aggregation into SOA order book. Zero heap allocation end-to-end.
 
+## Status
+
+Architecture documented. Meson build scaffold in place. ITCH parser in progress.
+
+## Build
+
+**Dependencies**
+
+| Dependency | Version | Install |
+|---|---|---|
+| GCC | 13.3.0 | system |
+| Meson | ≥ 1.3 | `sudo apt install meson ninja-build` |
+| DPDK | 23.11.x | `sudo apt install dpdk-dev` |
+| GTest | any | `sudo apt install libgtest-dev` |
+| Google Benchmark | any | `sudo apt install libbenchmark-dev` |
+
+`low-latency-order-book` headers are vendored under `subprojects/low-latency-order-book/include/llob/` — no separate install required (see [ADR-006](docs/adr/ADR-006-mpsc-order-book-subproject.md)).
+
+**Configure and build**
+
+```bash
+meson setup build
+cd build && ninja
+```
+
+Tests and benchmarks are enabled by default. Disable if GTest/GBench are not installed:
+
+```bash
+meson setup build -Denable_tests=false -Denable_benchmarks=false
+```
+
+**Development (pcap PMD)**
+
+```bash
+./feed-handler --vdev net_pcap0,rx_pcap=itch.pcap -l 2,4,6
+```
+
+See [ADR-003](docs/adr/ADR-003-pcap-pmd-development.md) for pcap PMD scope and limitations.
+
 ## Intended Architecture
 
 ```mermaid
