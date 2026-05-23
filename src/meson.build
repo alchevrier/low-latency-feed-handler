@@ -6,14 +6,9 @@
 #   2. pcap PMD pipeline (rte_eth_rx_burst → parser → MPSC → book)
 #   3. Benchmarks
 
-# feed_handler_sources = files(
-#   'itch_parser.cpp',
-#   'rx_pipeline.cpp',
-# )
-
-# executable(
-#   'feed-handler',
-#   feed_handler_sources,
-#   include_directories : itch_inc,
-#   dependencies        : [libdpdk, llob_dep],
-# )
+executable(
+  'feed-handler',
+  'main.cpp',
+  include_directories : itch_inc,
+  dependencies        : [libdpdk, llob_dep],
+)

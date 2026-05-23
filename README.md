@@ -4,7 +4,7 @@ C++23 low-latency feed handler — DPDK pcap PMD, NASDAQ ITCH 5.0 parser, zero-c
 
 ## Status
 
-Architecture documented. Meson build scaffold in place. ITCH parser in progress.
+Architecture documented. Meson build scaffold in place. ITCH 5.0 Add Order parser and MoldUDP64 unwrapper implemented, tested, and green. EAL threading model documented. `src/main.cpp` pipeline in progress.
 
 ## Build
 
@@ -47,9 +47,9 @@ See [ADR-003](docs/adr/ADR-003-pcap-pmd-development.md) for pcap PMD scope and l
 flowchart TD
     A["NIC / pcap PMD\n(rte_eth_rx_burst)"] -->|"rte_mbuf*\n(hugepage mempool)"| B["ITCH 5.0 Parser\n(zero-copy from mbuf)"]
     B -->|"MarketDataEvent\n(stack-allocated)"| C["MPSC Queue\n(N-SPSC, pre-allocated ring)"]
-    C -->|"move into slot"| D["Book Writer Thread\n(pinned core)"]
+    C -->|"move into slot"| D["Book Writer Thread\n(EAL lcore, CPU 6)"]
     D -->|"seqlock write"| E["SOA Order Book\n(pre-sized arrays)"]
-    E -->|"seqlock read"| F["Matching Thread\n(pinned core)"]
+    E -->|"seqlock read"| F["Matching Thread\n(EAL lcore, CPU 8)"]
 ```
 
 Zero heap allocation end-to-end. Each stage uses a pre-allocation strategy
@@ -67,3 +67,4 @@ queue, fixed arrays for the book. See [ADR-002](docs/adr/ADR-002-zero-heap-alloc
 | [ADR-005](docs/adr/ADR-005-rte-mbuf-zero-copy-parsing.md) | rte_mbuf Zero-Copy Parsing Boundary | Accepted |
 | [ADR-006](docs/adr/ADR-006-mpsc-order-book-subproject.md) | MPSC Integration from low-latency-order-book Subproject | Accepted |
 | [ADR-007](docs/adr/ADR-007-benchmark-methodology.md) | Benchmark Methodology — TSC Timing, Tail Latency, Environment | Accepted |
+| [ADR-008](docs/adr/ADR-008-lcore-threading-model.md) | EAL Lcore Threading Model | Accepted |
