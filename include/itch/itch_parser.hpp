@@ -1,18 +1,11 @@
 #pragma once
 #include <cassert>
 #include <cstdint>
-#include <cstring>
 #include <rte_byteorder.h>
 #include <llob/market_data_event.hpp>
+#include <itch/utils.hpp>
 
 namespace itch {
-
-template<typename T>
-T read(const uint8_t* ptr) {
-    T value;
-    std::memcpy(&value, ptr, sizeof(T));
-    return value;
-}
 
 llob::MarketDataEvent parse_add_order(const uint8_t* cursor, const uint16_t msg_len) {
     static constexpr uint16_t kAddOrderLen = 36;

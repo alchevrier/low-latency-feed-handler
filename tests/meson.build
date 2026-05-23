@@ -8,4 +8,14 @@ itch_parser_test = executable(
   include_directories : itch_inc,
   dependencies        : [gtest, llob_dep, libdpdk],
 )
+
 test('itch_parser_test', itch_parser_test)
+
+mold_udp64_test = executable(
+  'mold_udp64_test',
+  'mold_udp64_test.cpp',
+  include_directories : itch_inc,
+  dependencies        : [gtest, llob_dep, libdpdk],
+)
+
+test('mold_udp64_test', mold_udp64_test)
