@@ -26,3 +26,12 @@ executable(
   include_directories : itch_inc,
   dependencies        : [llob_dep, libdpdk],
 )
+
+# main without GBench memory mapping the file and collecting samples via vector. 
+# libdpdk is a header-only dependency here (rte_byteorder.h) — no EAL init required.
+executable(
+  'itch_file_bench',
+  'itch_file_bench.cpp',
+  include_directories : itch_inc,
+  dependencies        : [llob_dep, libdpdk],
+)

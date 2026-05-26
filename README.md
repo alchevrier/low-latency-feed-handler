@@ -4,7 +4,7 @@ C++23 low-latency feed handler — DPDK pcap PMD, NASDAQ ITCH 5.0 parser, zero-c
 
 ## Status
 
-ITCH 5.0 Add Order parser, MoldUDP64 unwrapper, and full DPDK pipeline (`src/main.cpp`) implemented and compiling clean. GBench compute-floor benchmarks and Cachegrind cache profiling complete. See [Benchmark Results](#benchmark-results) below.
+ITCH 5.0 Add Order parser, MoldUDP64 unwrapper, and full DPDK pipeline (`src/main.cpp`) implemented and compiling clean. Compute-floor benchmarks, real ITCH file benchmark against historical NASDAQ data (163M messages, 8669 symbols), cache hierarchy profiling, and prefetch optimization complete. See [Benchmark Results](#benchmark-results) below.
 
 ## Build
 
@@ -93,6 +93,12 @@ sudo sh -c 'echo powersave | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_go
 
 # Cache and branch profile
 valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./build/benchmarks/cachegrind_driver
+
+# Real ITCH file benchmark (requires historical NASDAQ ITCH 5.0 data)
+# Download from https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/
+sudo ./build/benchmarks/itch_file_bench /path/to/01302019.NASDAQ_ITCH50
+sudo ./build/benchmarks/itch_file_bench /path/to/01302019.NASDAQ_ITCH50 28   # L1 subset
+sudo ./build/benchmarks/itch_file_bench /path/to/01302019.NASDAQ_ITCH50 800  # L2 subset
 ```
 
 ### Results
@@ -135,3 +141,68 @@ The matching thread reads the order book via a seqlock; the book writer thread w
 The concurrent P99.9 is **6.3 µs**, not 26.7 ns — a 230× difference that averaging completely hides. This is the real seqlock cost under continuous cross-core write pressure.
 
 The feed handler benchmarks here focus exclusively on the write-path compute floor: parsing throughput and `order_book.add` cost. The full NIC-to-book end-to-end measurement — combining both paths under real concurrent load — remains future work, requiring a TSC-instrumented multi-lcore DPDK run with a real ITCH feed driving the writer.
+
+### Real ITCH Data — Cache Hierarchy and Symbol Table Performance
+
+**Dataset:** NASDAQ ITCH 5.0 historical file `01302019.NASDAQ_ITCH50` (January 30, 2019)  
+**Scale:** 368M total records, 163M Add Order `'A'` messages, 8,669 distinct symbols  
+**Workload:** `mmap` + sequential parse + StockLocate-indexed symbol table (`std::array<OrderBook<50>, 8714>`)  
+**What it measures:** Per-message latency for `locate = decode(); prefetch(books[locate]); books[locate].add(parse(msg))`
+
+> **Dataset statistics obtained via:** Pre-scan pass over the mmap'd file counting message types and distinct StockLocate codes (ITCH field at bytes [1:3]). Max StockLocate observed = 8,713 → array sized to 8,714 for direct indexing `books[locate]`. The ~45 unused slots (8,714 − 8,669) are zero-initialized but never accessed — they represent StockLocate codes that were never assigned symbols on that trading day.
+
+> **Note on DPDK pcap PMD:** The original plan was to use DPDK's pcap PMD (`--vdev net_pcap0,rx_pcap=file.pcap`) for this benchmark. However, analysis of the NASDAQ historical data format revealed it is **not pcap** — it's raw ITCH binary (concatenated `uint16_t BE length` + `length bytes ITCH body`), with no Ethernet frames, no UDP headers, and no MoldUDP64 wrapper. To isolate symbol table performance without building a custom pcap wrapper, this benchmark uses direct `mmap` and sequential parse. End-to-end DPDK pcap pipeline (NIC → mbuf → parse → book) remains future work.  
+
+Each `OrderBook<50>` is 1,624 bytes. The cache hierarchy breaks down as:
+
+| Cache tier | Size | Max symbols | Footprint |
+|---|---|---|---|
+| L1d | 48 KiB | ~30 | ~49 KB |
+| L2 | 1.28 MiB | ~807 | ~1.3 MB |
+| L3 | 18 MiB | ~11,621 | (full 8,669 fits) |
+| DRAM | — | 8,669 | ~14 MB |
+
+We benchmark three symbol subsets to isolate cache tier impact: 28 (L1-resident), 800 (L2-resident), and the full 8,669 (DRAM-spilling).
+
+#### Baseline (no prefetch)
+
+| Tier | Symbols | P50 | P99.9 | P99.99 |
+|---|---|---|---|---|
+| L1 | 28 | 20.0 ns | 235 ns | 506 ns |
+| L2 | 800 | 19.6 ns | 237 ns | 529 ns |
+| DRAM | 8,669 | 19.6 ns | 335 ns | 598 ns |
+
+**Key insight:** P50 is flat across all three tiers. The hot path is not memory-bound — the ~20 ns cost is ITCH field decode + `memmove` insert, not book lookup. The tail (P99.9) increases by 100 ns in the DRAM case because **illiquid symbols** (rarely traded, not seen for seconds) are evicted from L3 and require a DRAM fetch (~80 ns round trip).
+
+Market order flow follows a power law: the first 28 symbols (AAPL, MSFT, SPY, etc.) generate the overwhelming majority of messages. Those books stay L1-resident even when 8,669 total books exist. The median latency reflects the hot symbols; the tail reflects the cold ones.
+
+#### With `_mm_prefetch` (hide DRAM latency behind parse)
+
+```cpp
+uint16_t locate = ntohs(*(uint16_t*)(msg + 1));
+_mm_prefetch(&books[locate], _MM_HINT_T0);  // prefetch before parse
+books[locate].add(itch::parse_add_order(msg, len));
+```
+
+| Tier | Symbols | P50 | P99.9 | P99.99 | Δ P99.9 |
+|---|---|---|---|---|---|
+| L1 | 28 | 19.6 ns | 242 ns | 505 ns | +7 ns (noise) |
+| L2 | 800 | 19.2 ns | 219 ns | 537 ns | **-18 ns (-8%)** |
+| DRAM | 8,669 | 19.6 ns | 274 ns | 561 ns | **-61 ns (-18%)** |
+
+The prefetch has **zero hot-path cost** (P50 unchanged) and improves the cold symbol tail by 18% in the DRAM case. The remaining ~270 ns P99.9 is the irreducible DRAM latency for symbols that are fundamentally illiquid.
+
+#### Hardware counters (perf stat, 8669 symbols)
+
+| Metric | No prefetch | With prefetch | Change |
+|---|---|---|---|
+| LLC-loads | 4.02M | 3.81M | **-5%** |
+| LLC-load-misses | 2.25M | 2.29M | +2% (noise) |
+| L1-dcache-load-misses | 24.3M | 22.8M | **-6%** |
+| Instructions | 9.58B | 9.55B | -0.3% |
+| Cycles | 10.39B | 10.06B | **-3%** |
+| IPC | 0.92 | 0.95 | **+3%** |
+
+The prefetch converts blocking demand loads into non-blocking prefetch loads. LLC-load-misses stay constant (cold symbols still miss), but IPC improves because the DRAM latency is overlapped with parse compute rather than stalling the pipeline.
+
+**Design implication:** The flat `std::array<OrderBook<50>, 8714>` direct-index structure is the correct choice. No LRU cache or hot-path partitioning is needed — the market's power law keeps the active books warm naturally. The 14 MB footprint is irrelevant to median latency; only the tail (illiquid symbols) touches DRAM, and that's a fundamental constraint of the data, not the data structure.
